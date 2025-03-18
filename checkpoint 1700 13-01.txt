@@ -1,0 +1,748 @@
+;
+; Progetto.asm
+;
+; Created: 08/01/2021 10:43:19
+; Author : edoar
+;
+; perchè bisogna moltiplicare per 4 ADCH e ADCL
+; lo facciamo perchè abbiamo creato una tabella con un certo numro di righe(4 in questo caso) 
+; la prima colonna viene ignorata dal microcontrollore
+
+; Replace with your application code
+
+; Definizione dei registri utilizzati
+.DEF	mp 			= R16		; registro di lavoro (generico)
+.DEF	mp1 		= R17       ; registro di lavoro secondario (generico)
+.DEF	var_check 	= R18	
+.DEF    flags		= R19				; var_check è la variabile decrementata dalla subroutine di risposta ad interrupt
+								; quando arriva a 0 vieve attivato un campionamento dell'ADC
+;
+.EQU	T_CHECK 	= 100		; costante che definisce l'intervallo di campionamento della tensione in multipli di 10ms
+.EQU	TABLEN		= 256	
+.EQU    TSH_BAT		= 100		; lunghezza della tabella espressa in gruppi di 4 byte (non usato in questa versione)
+;
+;	crea tabella nella flash. In questo caso la tabella ha 256 righe consistenti ognuna in 4 byte
+;	valori possibili (da 0 a 255) della conversione su 8 bit. La prima cella rappresenta l'uscita dell'ADC e non è utilizzata
+;   la seconda la cifra delle centinaia da mandare al display; la terza la cifra delle decine; la quarta la cifra delle unità.
+;   in questa versione viene visualizzata l'uscita grezza dell'ADC. 
+;	Cambiando la LUT si può visualizzare la tensione, la temperatura o l'intensità luminosa.
+;
+.CSEG						; inizio segmento di codice
+.ORG 	0x1FFF				; direttiva formato word address(pc) ragionando per istruzioni, ha un inderizzamento organizzato 2 byte per volta, quindi noi questo valore di tabella ., lo moltiplico per 2 perche devo passare da byte address a word address( da				; definisce l'inizio della tabella che sarà scritta in flash
+;							indirizzo in byte della tabella è 3ffe, che sono i byte, 1fff è il word address, tabella valore a 2 byte
+; siccome non abbiamo direttmente accesso al data register dell'adc lo bypasso. questo lo fa la prima volta che inizializzo la tabella, cosi da puntare al suo inizio, questa cosa, caricando in mp la faccio per ogni valore della tabella( ZL = 0, ZH = 4) poi vario ZL per cambiare posizione nella tabella ( dato che devo moltiplicare per 4)
+; ex il decimo vaòlore della tabella con indirizzamento sequenziale sarà il 40
+
+; Ho un problema per la lettura del valore letto da ADC in 10 bit; sui display esce la lettura giusta ma questa rimane sempre fissa e non riesco a capire come mai dato che nel codice abbiamo solo modificato l'istruzuone 
+; istruzione mul?
+
+; tornando alla versione 8 bit(quindi tgliendo 4-5 istruzioni) funziona...
+; cosa bisogna fare per leggere 10 bit.
+
+; Buongiorno, noi stiamo provando a far comparire LO e HI sui display nel caso in cui la temperatura sia inferiore a 25°C o superiore a 45°C, come diceva ieri il professore, ma senza nessun risultato. Cercando online non siamo riusciti a trovare nulla di utile, potrebbe darci qualche indicazione?
+; non si puo fare
+
+; 12:13 parla del diodo di cripping
+;
+; si puo usare o no l'ampli, l'importante è fare scelte adeguate e commentate
+;
+; bisogna aspetare 10ms prima di 
+; si puo sfruttare direttaemtne la variabile contatore che usiamo per temporizzare, se la variabile contatoeìre diminuisce ogni 10 ms ì, per passare da 50 a 0 sono passati 500ms
+; andiamo a misurare tensione di alimentazione, poi switchamo al canale 1.1V poi iniziamo la rountine di wait per aspettare il cambio di reference, poi aspetto che il contatore arrivi a 25 ad es, ma è tanto
+; poi posso tornare a leggere la tensione a 1.1V 
+; questo va bene fino a quando non c'è il pulsante, in quel caso bisogna camponare molto piu in fretta
+
+; es entra nella funzione solo se time check è = 0, è come se capisse di dare in output i due contatori, non si devono sovraporre. bisoa usare metodi diversi. ad es io userei una sola variabile, poi la controllo 2 volte, quando arriva a 50 e quando a 0
+; ogni volta che facciamo partire una conversione abbiamo 2 passagi, uno admux e uno adcsra
+; in questo caso faccio admux, poi aspetto
+; io farei che admux attende i colpi di contatore e poi torna 
+; 12:37 parla di questo PERCHE' BISGONA CAMBIARE LA REFERENCE
+
+; per pulsante usare l'external interrupt per passare da uno all'altro quando viene cliccato 
+
+; si puo usare un solo contatore
+
+; consiglio per pulsante, collegare il valore del pulsante ad un flag, poi lo andiamo a verificare il parte diversa del codice
+
+; digital voltmeter uncalibrated funziona, lo uso per verificare che gli errori siano software e non hardware
+
+
+; consiglio, avere il main loop con i flag
+
+; metodi piu veloci, ogni interrupt richiama un "main loop"
+; settare i flag puo essere fatto attraverso una interrupt subroutine del timer counter, finchè è no passa attraverso, quando idventa si inizia a fare i task, è preferibile usare il
+; nostro codice attraverso una serie di falg, impostati da pulsante, timer counter etc, che ci permettono di saltare o entrare in parti di codice
+; ex parte di codice "gestione pulsante" , poi time check 
+; fare codice modulare
+
+
+; meglio usare flag rispetto a risposta ad interrupt? no ma non serve qui usare
+tabella:  
+.db 	0,0,0,0
+.db	1,0,0,1
+.db	2,0,0,2
+.db	3,0,0,3
+.db	4,0,0,4
+.db	5,0,0,5
+.db	6,0,0,6
+.db	7,0,0,7
+.db	8,0,0,8
+.db	9,0,0,9
+.db 	10,0,1,0
+.db	11,0,1,1
+.db	12,0,1,2
+.db	13,0,1,3
+.db	14,0,1,4
+.db	15,0,1,5
+.db	16,0,1,6
+.db	17,0,1,7
+.db	18,0,1,8
+.db	19,0,1,9
+.db 	20,0,2,0
+.db	21,0,2,1
+.db	22,0,2,2
+.db	23,0,2,3
+.db	24,0,2,4
+.db	25,0,2,5
+.db	26,0,2,6
+.db	27,0,2,7
+.db	28,0,2,8
+.db	29,0,2,9
+.db 	30,0,3,0
+.db	31,0,3,1
+.db	32,0,3,2
+.db	33,0,3,3
+.db	34,0,3,4
+.db	35,0,3,5
+.db	36,0,3,6
+.db	37,0,3,7
+.db	38,0,3,8
+.db	39,0,3,9
+.db 	40,0,4,0
+.db	41,0,4,1
+.db	42,0,4,2
+.db	43,0,4,3
+.db	44,0,4,4
+.db	45,0,4,5
+.db	46,0,4,6
+.db	47,0,4,7
+.db	48,0,4,8
+.db	49,0,4,9
+.db 	50,0,5,0
+.db	51,0,5,1
+.db	52,0,5,2
+.db	53,0,5,3
+.db	54,0,5,4
+.db	55,0,5,5
+.db	56,0,5,6
+.db	57,0,5,7
+.db	58,0,5,8
+.db	59,0,5,9
+.db 	60,0,6,0
+.db	61,0,6,1
+.db	62,0,6,2
+.db	63,0,6,3
+.db	64,0,6,4
+.db	65,0,6,5
+.db	66,0,6,6
+.db	67,0,6,7
+.db	68,0,6,8
+.db	69,0,6,9
+.db 	70,0,7,0
+.db	71,0,7,1
+.db	72,0,7,2
+.db	73,0,7,3
+.db	74,0,7,4
+.db	75,0,7,5
+.db	76,0,7,6
+.db	77,0,7,7
+.db	78,0,7,8
+.db	79,0,7,9
+.db 	80,0,8,0
+.db	81,0,8,1
+.db	82,0,8,2
+.db	83,0,8,3
+.db	84,0,8,4
+.db	85,0,5,5
+.db	86,0,8,6
+.db	87,0,8,7
+.db	88,0,8,8
+.db	89,0,8,9
+.db 	90,0,9,0
+.db	91,0,9,1
+.db	92,0,9,2
+.db	93,0,9,3
+.db	94,0,9,4
+.db	95,0,9,5
+.db	96,0,9,6
+.db	97,0,9,7
+.db	98,0,9,8
+.db	99,0,9,9
+;
+.db 	100,1,0,0
+.db	101,1,0,1
+.db	102,1,0,2
+.db	103,1,0,3
+.db	104,1,0,4
+.db	105,1,0,5
+.db	106,1,0,6
+.db	107,1,0,7
+.db	108,1,0,8
+.db	109,1,0,9
+.db 	110,1,1,0
+.db	111,1,1,1
+.db	112,1,1,2
+.db	113,1,1,3
+.db	114,1,1,4
+.db	115,1,1,5
+.db	116,1,1,6
+.db	117,1,1,7
+.db	118,1,1,8
+.db	119,1,1,9
+.db 	120,1,2,0
+.db	121,1,2,1
+.db	122,1,2,2
+.db	123,1,2,3
+.db	124,1,2,4
+.db	125,1,2,5
+.db	126,1,2,6
+.db	127,1,2,7
+.db	128,1,2,8
+.db	129,1,2,9
+.db 	130,1,3,0
+.db	131,1,3,1
+.db	132,1,3,2
+.db	133,1,3,3
+.db	134,1,3,4
+.db	135,1,3,5
+.db	136,1,3,6
+.db	137,1,3,7
+.db	138,1,3,8
+.db	139,1,3,9
+.db 	140,1,4,0
+.db	141,1,4,1
+.db	142,1,4,2
+.db	143,1,4,3
+.db	144,1,4,4
+.db	145,1,4,5
+.db	146,1,4,6
+.db	147,1,4,7
+.db	148,1,4,8
+.db	149,1,4,9
+.db 	150,1,5,0
+.db	151,1,5,1
+.db	152,1,5,2
+.db	153,1,5,3
+.db	154,1,5,4
+.db	155,1,5,5 
+.db	156,1,5,6
+.db	157,1,5,7
+.db	158,1,5,8
+.db	159,1,5,9
+.db 	160,1,6,0
+.db	161,1,6,1
+.db	162,1,6,2
+.db	163,1,6,3
+.db	164,1,6,4
+.db	165,1,6,5
+.db	166,1,6,6
+.db	167,1,6,7
+.db	168,1,6,8
+.db	169,1,6,9
+.db 	170,1,7,0
+.db	171,1,7,1
+.db	172,1,7,2
+.db	173,1,7,3
+.db	174,1,7,4
+.db	175,1,7,5
+.db	176,1,7,6
+.db	177,1,7,7
+.db	178,1,7,8
+.db	179,1,7,9
+.db 	180,1,8,0
+.db	181,1,8,1
+.db	182,1,8,2
+.db	183,1,8,3
+.db	184,1,8,4
+.db	185,1,5,5
+.db	186,1,8,6
+.db	187,1,8,7
+.db	188,1,8,8
+.db	189,1,8,9
+.db 	190,1,9,0
+.db	191,1,9,1
+.db	192,1,9,2
+.db	193,1,9,3
+.db	194,1,9,4
+.db	195,1,9,5
+.db	196,1,9,6
+.db	197,1,9,7
+.db	198,1,9,8
+.db	199,1,9,9
+;
+.db 	200,2,0,0
+.db	201,2,0,1
+.db	202,2,0,2
+.db	203,2,0,3
+.db	204,2,0,4
+.db	205,2,0,5
+.db	206,2,0,6
+.db	207,2,0,7
+.db	208,2,0,8
+.db	209,2,0,9
+.db 	210,2,1,0
+.db	211,2,1,1
+.db	212,2,1,2
+.db	213,2,1,3
+.db	214,2,1,4
+.db	215,2,1,5
+.db	216,2,1,6
+.db	217,2,1,7
+.db	218,2,1,8
+.db	219,2,1,9
+.db 	220,2,2,0
+.db	221,2,2,1
+.db	222,2,2,2
+.db	223,2,2,3
+.db	224,2,2,4
+.db	225,2,2,5
+.db	226,2,2,6
+.db	227,2,2,7
+.db	228,2,2,8
+.db	229,2,2,9
+.db 	230,1,3,0
+.db	231,2,3,1
+.db	232,2,3,2
+.db	233,2,3,3
+.db	234,2,3,4
+.db	235,2,3,5
+.db	236,2,3,6
+.db	237,2,3,7
+.db	238,2,3,8
+.db	239,2,3,9
+.db 	240,2,4,0
+.db	241,2,4,1
+.db	242,2,4,2
+.db	243,2,4,3
+.db	244,2,4,4
+.db	245,2,4,5
+.db	246,2,4,6
+.db	247,2,4,7
+.db	248,2,4,8
+.db	249,2,4,9
+.db 	250,2,5,0
+.db	251,2,5,1
+.db	252,2,5,2
+.db	253,2,5,3
+.db	254,2,5,4
+.db	255,2,5,5
+
+.CSEG
+.ORG 0x0000
+
+
+
+
+
+;
+; INTERRUPT VECTORS FOLLOW
+;
+ 	jmp RESET 					; vector 1:		Reset Handler
+	jmp EXT_INT0				; vector 2:		IRQ0 Handler
+	jmp EXT_INT1				; vector 3:		IRQ1 Handler
+	jmp PCINTR0					; vector 4:		PCINT0 Handler
+	jmp PCINTR1					; vector 5:		PCINT1 Handler
+	jmp PCINTR2					; vector 6:		PCINT2 Handler
+	jmp WDT						; vector 7:		Watchdog timer handler
+	jmp TIM2_COMPA				; vector 8:		Timer2 Compare A handler
+	jmp TIM2_COMPB				; vector 9:		Timer2 compare B handler
+	jmp TIM2_OVF				; vector 10:	Timer2 Overflow Handler
+	jmp TIM1_CAPT				; vector 11:	Timer1 Capture Handler
+	jmp TIM1_COMPA				; vector 12:	Timer1 CompareA Handler
+	jmp TIM1_COMPB				; vector 13:	Timer1 CompareB Handler
+	jmp TIM1_OVF				; vector 14:	Timer1 Overflow Handler
+	jmp TIM0_COMPA				; vector 15:	Timer 0 CompareA handler
+	jmp TIM0_COMPB				; vector 16:	Timer 0 CompareB handler
+	jmp TIM0_OVF 				; vector 17:	Timer0 Overflow Handler
+	jmp SPI_STC					; vector 18:	SPI Transfer Complete Handler
+	jmp USART_RXC				; vector 19:	USART RX Complete Handler
+	jmp USART_UDRE				; vector 20:	USART UDR Empty Handler
+	jmp USART_TXC				; vector 21:	USART TX Complete Handler
+	jmp ADC_conv				; vector 22:	ADC Conversion Complete Handler
+	jmp EE_RDY					; vector 23:	EEPROM Ready Handler
+	jmp ANA_COMP				; vector 24:	Analog Comparator Handler
+	jmp TWSI					; vector 25:	Two-wire Serial Interface Handler
+	jmp SPM_RDY					; vector 26:	Store Program Memory Ready Handler
+;
+; END OF INTERRUPT VECTORS 
+;
+;
+;
+;
+RESET:
+; In questo punto inizia il programma principale
+;
+; Inizializzazione dello stack pointer all'ultima cella della RAM
+;
+	ldi     mp,HIGH(RAMEND)
+   	out     SPH,mp
+   	ldi     mp,LOW(RAMEND)
+   	out     SPL,mp
+;
+; Inizializzazione in uscita dei primi 7 bit della porta D. PD0 - PD3 = ABCD; PD4 = LE centinaia; PD5 = LE decine; PD6 = LE unità.
+
+	ldi		mp,0b0111_1111
+	out		DDRD,mp
+;
+	ldi		mp, 0b0111_0000			; mette a 1 i LE dei 4511 (condizione di memoria)
+	out		PORTD, mp						
+;
+; divide per sedici la frequenza del clock interno (16 MHz)
+	ldi		mp, 0b1000_0000
+	sts		CLKPR, mp				; abilita la programmazione del prescaler
+	ldi		mp, 0b0000_0100
+	sts		CLKPR, mp				; programma la divisione per 16 del clock interno
+;
+;	programma il timer 0
+;
+; seleziona prescaler passo 1024 (se 1 MHz allora 1024 us)
+    ldi     mp,0b0000_0101
+   	out		TCCR0B,mp
+;	seleziona tempo tra interrupt pari a circa 10ms (10,24 ms)
+	ldi		mp, 246
+   	out		TCNT0,mp
+;	abilita l'interrupt in caso di overflow di TCNT0
+	ldi     mp,0b0000_0001
+	sts     TIMSK0,mp
+;
+; inizializza la variabile var_check che sarà decrementata dalla subroutine di risposta ad interrupt 
+;
+	ldi		var_check, T_CHECK
+;
+;   programma l'ADC in modo da abilitarlo senza abilitare l'interrupt e seleziona un fattore di prescaling pari a 4.
+;   Deve SEMPRE precedere la selezione dell'ingresso: non si può selezionare l'ingresso dell'ADC se questo non è stato preventivamente abilitato
+;
+	ldi 	mp,0b10000010
+	sts		ADCSRA,mp
+;
+;	programma l'ADC perché lavori con riferimento interno pari alla tensione di alimentazione (AVcc), giustifichi a sinistra il risultato e senta l'input su PC0 (ADC0)
+;
+;
+;
+; abilita gli interrupt a livello di SREG
+;
+	sei
+;
+;
+;************
+; scrivere il codice per led ogni 1000ms controlla e se V<4.2 accende il led, se risale lo spengo 
+; come si fa a fare la temporizzazione senza usare l'interrupt?
+; fare flow chart
+
+
+
+
+
+
+main_loop:
+;
+;	verifica se è trascorso un tempo pari all'intervallo di campionamento della tensione (var_check = 0?)
+;
+	cpi		var_check,0
+;
+;   salto condizionato a end_loop se var_check è diverso da 0
+;	
+	brne	end_loop	; era end loop prima
+; 
+;   le istruzioni da qui a rjmp main_loop vengono eseguite solo se var_check è pari a 0
+;
+	ldi		var_check,T_CHECK		; per prima cosa inizializza nuovamente var_check
+;
+;	prepara il passaggio dell'indirizzo iniziale della tabella alla subroutine come variabile locale nello stack
+;
+	ldi		ZH,high(2*tabella)		; inizializza ZH con la parte alta dell'indirizzo della tabella
+	ldi		ZL,low(2*tabella)		; inizializza ZL con la parte bassa dell'indirizzo della tabella
+
+;	questo lo spiega nella lezione dell'11/01 
+;									
+	push	ZH				; mette ZH nello stack per passarlo alla subroutine che lo utilizzerà come parametro
+;
+	push	ZL				; mette ZL nello stack per passarlo alla subroutine che lo utilizzerà come parametro
+;
+;	richiamo della subroutine measure che campiona la tensione e visualizza il risultato (attenzione, la call memorizza nello stack i due byte dell'indirizzo di rientro)
+;
+	call	measure
+
+
+; inizia il programma per misurare la tensione di batteria 
+
+	ldi		mp,0b0110_0001
+	sts		ADMUX,mp
+;	
+	lds 	mp,ADCSRA			; usiamo lds e non in perchè il registro ADCSRA non è di I/O
+	ldi 	mp1,0b0100_0000		; mette a uno il bit di flag della conversione
+	or  	mp,mp1
+	sts 	ADCSRA,mp           ; usiamo sts e non out perchè il registro ADCSRA non è di I/O
+	;
+; aspetta che la conversione sia pronta testando ADSC in ADCSRA: a conversione terminata ADSC torna a 0
+;
+check_conv:
+	lds 	mp,ADCSRA          ;usiamo lds e non in perchè il registro ADCSRA non è di I/O
+	ldi 	mp1,0b0100_0000
+	and 	mp,mp1
+	cpi     mp,0b0000_0000
+	brne	check_conv
+;
+;	leggi il valore convertito su 8 bit
+;
+	lds 	mp,ADCH          ;usiamo lds e non in perchè il registro ADCH non è di I/O
+;
+; se il valore letto è maggiore o eguale alla soglia salta a next02
+;
+	cpi 	mp,TSH_BAT
+	brsh	next01			; se è più alta vai tra
+;
+; mette ad 1 il bit 0 di flags senza modificare gli altri
+;
+	ldi 	mp1,0b0000_0001
+	or  	flags,mp1
+;
+next01:
+	cpi 	mp,TSH_BAT
+	brlo	next02
+;
+; mette a 0 il bit 0 di flags senza modificare gli altri
+;
+	ldi 	mp1,0b1111_1110
+	and 	flags,mp1
+next02:
+;
+;	verifica il flag per eventualmente accendere il led
+;
+	ldi 	mp1,0b0000_0001			; prepara la maschera per il bit 0 di flags
+	and 	mp1,flags				; isola il bit 0 di flags in mp1	
+    cpi 	mp1,0b0000_0001
+	brne	next03
+;
+; Queste istruzioni scrivono il valore 1 nella quinta linea della porta B; il led  si accende
+;
+	ldi     mp,0b0010_0000
+   	out     PORTB,mp
+;
+next03:
+;
+;
+;	verifica il flag per eventualmente spegnere il led
+;
+	ldi 	mp1,0b0000_0001		; prepara la maschera per il bit 0 di flags
+    and     mp1,flags			; isola il bit 0 di flags in mp1 
+ 	cpi 	mp1,0b0000_0000
+	brne	end_loop
+;
+; Queste istruzioni scrivono il valore 0 nella quinta linea della porta B; il led  si spegne
+;
+	ldi 	mp,0b0000_0000
+   	out     PORTB,mp
+;
+end_loop:
+;
+	nop						; istruzione di comodo aggiunta per il debugging (nop = no operation)
+;
+    rjmp main_loop
+;
+measure:
+; cambia porta dell'adc per misurare dal pin0
+
+	ldi		mp,0b0110_0000
+	sts		ADMUX,mp
+;
+	pop		mp		; estrae temporaneamente dallo stack l'ultimo byte dell'indirizzo di rientro messo nello stack dalla call
+	pop		mp1		; estrare temporaneamente dallo stack il primo byte dell'indirizzo di rientro messo nello stack dalla call
+	pop		ZL		; recupera il byte basso dell'indirizzo  della tabella che è stato passato dal programma chiamante nello stack
+	pop		ZH		; recupera il byte alto dell'indirizzo della tabella che è stato passato dal programma chiamante nello stack
+	push	mp1		; ripristina nello stack il primo byte dell'indirizzo di rientro messo nello stack dalla call
+	push	mp		; ripristina nello stack l'ultimo byte dell'indirizzo di rientro messo nello stack dalla call
+;
+;	inizia adesso la conversione portando a 1 il bit 6 di ADCSRA (ADSC) senza modificare null'altro in ADCSRA
+;
+	lds		mp,ADCSRA
+	ldi		mp1,0b0100_0000
+	or		mp,mp1
+	sts		ADCSRA,mp
+;
+;	aspetta che la conversione sia pronta testando ADSC in ADCSRA: a conversione terminata ADSC torna a 0 
+;
+
+check_conv2:
+	lds		mp,ADCSRA
+	ldi		mp1,0b0100_0000
+	and		mp,mp1
+	cpi		mp, 0b0000_0000
+	brne	check_conv2
+;
+;
+;	legge il valore convertito su 8 bit (siccome è stata scelta la giustificazione a sinistra gli 8 bit più significativi 
+;	del risultato sono in ADCH)
+;
+;
+	lds		mp, ADCH
+	ldi		mp1,4
+	mul		mp,mp1
+;
+	add		ZL,R0			; Punta alla cella della tabella che corrisponde al valore letto dall'ADC
+	adc		ZH,R1
+;
+;	prepara visulaizzazione su display
+;
+	lpm		mp, Z+			; legge primo valore della riga della tabella che contiene il valore completo intero su 8 bit ed incrementa Z
+;
+	lpm		mp, Z+			; legge il secondo valore della riga della tabella che contiene la cifra delle centinaia  ed incrementa Z
+	ori		mp,0b0111_0000	; lascia a uno PD4 - PD7	e non modifica PD0 - PD3	
+	out		PORTD, mp		; scrive in uscita la cifra delle centinaia
+	andi	mp, 0b0110_1111	; prepara PD4 a livello basso (LE centinaia) senza modificare la cifra delle centinaia
+	out		PORTD, mp		; abilita LE centinaia
+	nop						; istruzioni di attesa necessarie per garantire l'efficacia dello strobe
+	nop
+	nop
+	nop
+	nop
+	ori		mp,0b0111_0000	; mette a uno PD4 - PD7 (alza LE)
+	out		PORTD, mp
+;		
+;
+	lpm		mp, Z+			; legge il terzo valore della riga della tabella che contiene la cifra delle decine  ed incrementa Z
+;
+	ori		mp,0b0111_0000	; lascia a 1  PD4 - PD7		e non modifica PD0 - PD3
+	out		PORTD, mp		; scrive in uscita la cifra delle decine
+	andi	mp, 0b0101_1111	; prepara PD5 a livello basso (LE decine) senza modificare la cifra delle decine
+	out		PORTD, mp		; abilita LE decine
+	nop						; istruzioni di attesa necessarie per garantire l'efficacia dello strobe
+	nop
+	nop
+	nop
+	nop
+	ori		mp,0b0111_0000	; mette a uno PD4 - PD7 (alza LE)
+	out		PORTD, mp	
+;
+	lpm		mp, Z+			; legge il quarto valore della riga della tabella che contiene la cifra delle unità  ed incrementa Z
+;
+	ori		mp,0b0111_0000	; lascia a 1  PD4 - PD7		e non modifica PD0 - PD3		
+	out		PORTD, mp		; scrive in uscita la cifra delle unità
+	andi	mp, 0b0011_1111	; prepara PD6 a livello basso (LE unità) senza modificare la cifra delle unità
+	out		PORTD, mp		; abilita LE unità
+	nop						; istruzioni di attesa necessarie per garantire l'efficacia dello strobe
+	nop
+	nop
+	nop
+	nop
+	ori		mp,0b0111_0000	; mette a uno PD4 - PD7 (alza LE)
+	out		PORTD, mp	
+;
+;	scrittura display terminata
+;	
+;
+	ret									; ritorna al programma chiamante
+;
+
+
+
+
+
+;
+;  INTERRUPT HANDLERS FOLLOW
+;
+;
+EXT_INT0:
+	reti							; vector 2:		IRQ0 Handler
+;	
+EXT_INT1:							
+	reti							; vector 3:		IRQ1 Handler
+;
+PCINTR0:
+	reti							; vector 4:		PCINT0 Handler
+;
+PCINTR1:					
+	reti							; vector 5:		PCINT1 Handler
+;
+PCINTR2:					
+	reti							; vector 6:		PCINT2 Handler
+;
+WDT:								
+	reti							; vector 7:		Watchdog timer handler
+;
+TIM2_COMPA:
+	reti							; vector 8:		Timer2 compare A handler
+;
+TIM2_COMPB:
+	reti							; vector 9:		Timer2 compare B handler
+;
+TIM2_OVF:							
+	reti							; vector 10:		Timer2 Overflow Handler
+;
+TIM1_CAPT:
+	reti							; vector 11:		Timer1 Capture Handler
+;
+TIM1_COMPA:	
+	reti							; vector 12:		Timer1 CompareA Handler
+;
+TIM1_COMPB:			
+	reti							; vector 13:		Timer1 CompareB Handler
+;
+TIM1_OVF:					
+	reti							; vector 14:		Timer1 Overflow Handler
+;
+TIM0_COMPA:					
+	reti							; vector 15:		Timer 0 CompareA handler
+;
+TIM0_COMPB:
+	reti							; vector 16:		Timer 0 CompareB handler
+;
+;			
+TIM0_OVF:
+;
+;	salva mp nello stack prima di utilizzarlo
+	push	mp
+;  	salva SREG nello stack
+	in		mp,SREG
+	push	mp
+;   inizializza nuovamente la variabile di conteggio del timer counter (10,24 ms)
+	ldi		mp,246
+    out		TCNT0,mp
+;	decrementa la variabile di conteggio della temporizzazione dell'ADC
+	dec		var_check
+;	ripristina SREG
+	pop 	mp
+	out 	SREG,mp
+;	ripristina mp
+	pop 	mp
+;		
+	reti							; vector 17:		Timer0 Overflow Handler
+;
+;
+;
+SPI_STC:
+	reti							; vector 18:		SPI Transfer Complete Handler
+;
+USART_RXC:						
+	reti							; vector 19:		USART RX Complete Handler
+;
+USART_UDRE:					
+	reti							; vector 20:		USART UDR Empty Handler
+;
+USART_TXC:					
+	reti							; vector 21:		USART TX Complete Handler
+;
+ADC_conv:					
+	reti							; vector 22:		ADC Conversion Complete Handler
+;
+EE_RDY:						
+	reti							; vector 23:		EEPROM Ready Handler
+;
+ANA_COMP:						
+	reti							; vector 24:		Analog Comparator Handler
+;	
+TWSI:
+	reti							; vector 25:		Two-wire Serial Interface Handler
+;
+SPM_RDY:
+	reti							; vector 26:		Store Program Memory Ready Handler
